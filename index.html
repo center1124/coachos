@@ -1,4 +1,4 @@
-<!-- CoachOS v3.0 — 업무 트래킹 -->
+<!-- CoachOS v1.0 — 업무 트래킹 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -36,10 +36,11 @@ const {useState,useEffect,useRef,useCallback}=React;
 
 /* ── 상수 ── */
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbyOWrQXtFfGWcnw0VkcsDau81r1JFgcYwgHBxg6E5I93GocHPdfUyYJuuke5tb_alZP/exec";
+const VERSION="v1.0";
 const DEFAULT_MODEL="gemini-2.0-flash";
 const GEMINI_KEY_LS="coachos_gkey";
 const GEMINI_MODEL_LS="coachos_gmodel";
-const COACH_PW="coach2025";
+const COACH_PW="coach1234";
 
 /* ── 기본 업무 카테고리 ── */
 const DEFAULT_CATEGORIES=[
@@ -971,6 +972,9 @@ function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setA
           <div style={{fontSize:11,color:"var(--text-dim)",padding:"10px 14px",
             background:"var(--surface2)",borderRadius:8,marginBottom:12,lineHeight:1.7}}>
             필요 시트: <code style={{color:"var(--accent)"}}>work_records</code>, <code style={{color:"var(--accent)"}}>work_categories</code>
+          </div>
+          <div style={{fontSize:11,color:"var(--text-dim)",marginBottom:12}}>
+            CoachOS <span style={{color:"var(--accent)"}}>{VERSION}</span>
           </div>
           <Btn variant="ghost" onClick={()=>setShowSettings(false)}>닫기</Btn>
         </Card>
