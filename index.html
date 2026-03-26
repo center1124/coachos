@@ -1,4 +1,4 @@
-<!-- CoachOS v1.0 — 업무 트래킹 -->
+<!-- CoachOS v1.1 — 업무 트래킹 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -36,7 +36,7 @@ const {useState,useEffect,useRef,useCallback}=React;
 
 /* ── 상수 ── */
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbyOWrQXtFfGWcnw0VkcsDau81r1JFgcYwgHBxg6E5I93GocHPdfUyYJuuke5tb_alZP/exec";
-const VERSION="v1.0";
+const VERSION="v1.1";
 const DEFAULT_MODEL="gemini-2.0-flash";
 const GEMINI_KEY_LS="coachos_gkey";
 const GEMINI_MODEL_LS="coachos_gmodel";
@@ -113,6 +113,26 @@ async function sheetWrite(sheet,row,values){
 async function sheetDelete(sheet,row){
   const r=await fetch(SCRIPT_URL,{method:"POST",body:JSON.stringify({action:"delete",sheet,row})});
   if(!r.ok)throw new Error("sheetDelete 실패: "+r.status);
+}
+
+/* ── 멤버 저장/로드
+   sheet: members
+   [name, pin, memo]
+── */
+async function loadMembers(){
+  const rows=await sheetGet("members");
+  return rows.filter(r=>r[0]).map(r=>({
+    name:String(r[0]),pin:String(r[1]),memo:String(r[2]||"")
+  }));
+}
+async function saveMembers(members){
+  for(let i=0;i<members.length;i++){
+    await sheetWrite("members",i+1,[members[i].name,members[i].pin,members[i].memo||""]);
+  }
+  // 이후 행 비우기 (삭제된 멤버)
+}
+async function deleteMemberRow(rowIdx){
+  await sheetDelete("members",rowIdx+1);
 }
 
 /* ── 카테고리 저장/로드
@@ -901,6 +921,138 @@ function MyHome({records,categories,onSave,apiKey,geminiModel}){
   );
 }
 
+/* ── 멤버 관리 ── */
+function MemberManager(){
+  const [members,setMembers]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [showForm,setShowForm]=useState(false);
+  const [editIdx,setEditIdx]=useState(null);
+  const [delIdx,setDelIdx]=useState(null);
+  const [draft,setDraft]=useState({name:"",pin:"",memo:""});
+
+  useEffect(()=>{
+    loadMembers().then(m=>{setMembers(m);setLoading(false);})
+      .catch(e=>{console.error(e);setLoading(false);});
+  },[]);
+
+  const openAdd=()=>{
+    setDraft({name:"",pin:"",memo:""});
+    setEditIdx(null);
+    setShowForm(true);
+  };
+
+  const openEdit=i=>{
+    setDraft({...members[i]});
+    setEditIdx(i);
+    setShowForm(true);
+  };
+
+  const handleSave=async()=>{
+    if(!draft.name.trim()){alert("이름을 입력해주세요.");return;}
+    if(!draft.pin.trim()){alert("PIN을 입력해주세요.");return;}
+    // 중복 이름 체크
+    const dup=members.some((m,i)=>m.name===draft.name.trim()&&i!==editIdx);
+    if(dup){alert("이미 같은 이름의 멤버가 있어요.");return;}
+    setSaving(true);
+    try{
+      let updated;
+      if(editIdx!==null){
+        updated=members.map((m,i)=>i===editIdx?{...draft,name:draft.name.trim(),pin:draft.pin.trim()}:m);
+      }else{
+        updated=[...members,{name:draft.name.trim(),pin:draft.pin.trim(),memo:draft.memo||""}];
+      }
+      await saveMembers(updated);
+      setMembers(updated);
+      setShowForm(false);
+      setEditIdx(null);
+    }catch(e){alert("저장 실패: "+e.message);}
+    finally{setSaving(false);}
+  };
+
+  const handleDelete=async i=>{
+    setSaving(true);
+    try{
+      const updated=members.filter((_,j)=>j!==i);
+      // 전체 덮어쓰기 후 나머지 행 삭제
+      for(let j=0;j<updated.length;j++){
+        await sheetWrite("members",j+1,[updated[j].name,updated[j].pin,updated[j].memo||""]);
+      }
+      // 마지막 행 비우기
+      await sheetDelete("members",updated.length+1);
+      setMembers(updated);
+      setDelIdx(null);
+    }catch(e){alert("삭제 실패: "+e.message);}
+    finally{setSaving(false);}
+  };
+
+  if(loading)return<div style={{color:"var(--text-dim)",fontSize:13,padding:20}}>불러오는 중…</div>;
+
+  return(
+    <div>
+      {showForm&&(
+        <Card style={{marginBottom:14,border:"1px solid var(--accent)"}}>
+          <div style={{fontWeight:600,fontSize:14,marginBottom:14}}>
+            {editIdx!==null?"멤버 수정":"새 멤버 추가"}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+            <div>
+              <div style={{fontSize:11,color:"var(--text-dim)",marginBottom:4}}>이름 *</div>
+              <FInput value={draft.name} onChange={v=>setDraft(p=>({...p,name:v}))} placeholder="이름"/>
+            </div>
+            <div>
+              <div style={{fontSize:11,color:"var(--text-dim)",marginBottom:4}}>PIN *</div>
+              <FInput value={draft.pin} onChange={v=>setDraft(p=>({...p,pin:v}))} placeholder="PIN 번호" type="password"/>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:"var(--text-dim)",marginBottom:4}}>메모 (선택)</div>
+            <FInput value={draft.memo} onChange={v=>setDraft(p=>({...p,memo:v}))} placeholder="특이사항, 역할 등"/>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <Btn size="sm" onClick={handleSave} disabled={saving}>
+              {saving?"저장 중…":editIdx!==null?"수정 저장":"추가"}
+            </Btn>
+            <Btn size="sm" variant="ghost" onClick={()=>{setShowForm(false);setEditIdx(null);}}>취소</Btn>
+          </div>
+        </Card>
+      )}
+
+      {members.length===0&&!showForm&&(
+        <div style={{textAlign:"center",padding:40,color:"var(--text-dim)",fontSize:13}}>
+          아직 등록된 멤버가 없어요
+        </div>
+      )}
+
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+        {members.map((m,i)=>(
+          <div key={i} style={{background:"var(--surface2)",borderRadius:10,
+            padding:"12px 16px",border:"1px solid var(--border)",
+            display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:14,fontWeight:600,color:"var(--text)"}}>{m.name}</div>
+              {m.memo&&<div style={{fontSize:11,color:"var(--text-dim)",marginTop:2}}>{m.memo}</div>}
+            </div>
+            <div style={{display:"flex",gap:6,alignItems:"center"}}>
+              {delIdx===i
+                ?<Confirm onOk={()=>handleDelete(i)} onCancel={()=>setDelIdx(null)}/>
+                :<>
+                  <Btn size="xs" variant="ghost" onClick={()=>openEdit(i)}>수정</Btn>
+                  <Btn size="xs" variant="ghost" onClick={()=>setDelIdx(i)}
+                    style={{color:"var(--danger)"}}>삭제</Btn>
+                </>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {!showForm&&(
+        <Btn variant="outline" full onClick={openAdd}>+ 멤버 추가</Btn>
+      )}
+    </div>
+  );
+}
+
 /* ── 코치 대시보드 ── */
 function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setApiKey,geminiModel,setGeminiModel}){
   const [tab,setTab]=useState("weekly");
@@ -990,7 +1142,7 @@ function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setA
       )}
 
       <div style={{display:"flex",borderBottom:"2px solid var(--border)",marginBottom:20}}>
-        {[["weekly","주간 기록"],["write","직접 입력"]].map(([k,l])=>(
+        {[["weekly","주간 기록"],["write","직접 입력"],["members","멤버 관리"]].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)}
             style={{padding:"10px 20px",border:"none",background:"none",cursor:"pointer",
               fontSize:14,fontWeight:tab===k?600:400,
@@ -1015,6 +1167,9 @@ function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setA
           record={records[coachWriteDate]} categories={categories}
           onSave={handleSaveRecord}
           onDateChange={setCoachWriteDate}/>
+      )}
+      {tab==="members"&&(
+        <MemberManager/>
       )}
     </div>
   );
