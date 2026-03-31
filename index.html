@@ -1,4 +1,4 @@
-<!-- CoachOS v1.3 — 업무 트래킹 -->
+<!-- CoachOS v1.4 — 업무 트래킹 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -36,7 +36,7 @@ const {useState,useEffect,useRef,useCallback}=React;
 
 /* ── 상수 ── */
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbyOWrQXtFfGWcnw0VkcsDau81r1JFgcYwgHBxg6E5I93GocHPdfUyYJuuke5tb_alZP/exec";
-const VERSION="v1.3";
+const VERSION="v1.4";
 const DEFAULT_MODEL="gemini-2.0-flash";
 const GEMINI_KEY_LS="coachos_gkey";
 const GEMINI_MODEL_LS="coachos_gmodel";
@@ -1273,11 +1273,11 @@ function App(){
     if(!name.trim()){setErr("이름을 입력해주세요.");return;}
     if(!pin.trim()){setErr("PIN을 입력해주세요.");return;}
     try{
-      const rows=await sheetGet("members");
-      if(rows.length===0){
+      const members=await loadMembers();
+      if(members.length===0){
         setErr("등록된 멤버가 없어요. 코치에게 문의해주세요.");return;
       }
-      const match=rows.find(r=>String(r[0]).trim()===name.trim()&&String(r[1]).trim()===pin.trim());
+      const match=members.find(m=>m.name.trim()===name.trim()&&m.pin.trim()===pin.trim());
       if(!match){setErr("이름 또는 PIN이 올바르지 않습니다.");return;}
       setSession({role:"member",name:name.trim()});
     }catch(e){
