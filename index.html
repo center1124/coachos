@@ -1,4 +1,4 @@
-<!-- CoachOS v1.1 — 업무 트래킹 -->
+<!-- CoachOS v1.3 — 업무 트래킹 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -36,7 +36,7 @@ const {useState,useEffect,useRef,useCallback}=React;
 
 /* ── 상수 ── */
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbyOWrQXtFfGWcnw0VkcsDau81r1JFgcYwgHBxg6E5I93GocHPdfUyYJuuke5tb_alZP/exec";
-const VERSION="v1.1";
+const VERSION="v1.3";
 const DEFAULT_MODEL="gemini-2.0-flash";
 const GEMINI_KEY_LS="coachos_gkey";
 const GEMINI_MODEL_LS="coachos_gmodel";
@@ -125,11 +125,16 @@ async function loadMembers(){
     name:String(r[0]),pin:String(r[1]),memo:String(r[2]||"")
   }));
 }
-async function saveMembers(members){
+async function saveMembers(members, prevCount){
   for(let i=0;i<members.length;i++){
     await sheetWrite("members",i+1,[members[i].name,members[i].pin,members[i].memo||""]);
   }
-  // 이후 행 비우기 (삭제된 멤버)
+  // 이전보다 줄었으면 고아 행 삭제
+  if(prevCount&&prevCount>members.length){
+    for(let i=members.length+1;i<=prevCount;i++){
+      await sheetDelete("members",i);
+    }
+  }
 }
 async function deleteMemberRow(rowIdx){
   await sheetDelete("members",rowIdx+1);
@@ -949,6 +954,7 @@ function MemberManager(){
   };
 
   const handleSave=async()=>{
+    if(saving)return;
     if(!draft.name.trim()){alert("이름을 입력해주세요.");return;}
     if(!draft.pin.trim()){alert("PIN을 입력해주세요.");return;}
     // 중복 이름 체크
@@ -962,7 +968,7 @@ function MemberManager(){
       }else{
         updated=[...members,{name:draft.name.trim(),pin:draft.pin.trim(),memo:draft.memo||""}];
       }
-      await saveMembers(updated);
+      await saveMembers(updated,members.length);
       setMembers(updated);
       setShowForm(false);
       setEditIdx(null);
@@ -973,13 +979,9 @@ function MemberManager(){
   const handleDelete=async i=>{
     setSaving(true);
     try{
+      const prevCount=members.length;
       const updated=members.filter((_,j)=>j!==i);
-      // 전체 덮어쓰기 후 나머지 행 삭제
-      for(let j=0;j<updated.length;j++){
-        await sheetWrite("members",j+1,[updated[j].name,updated[j].pin,updated[j].memo||""]);
-      }
-      // 마지막 행 비우기
-      await sheetDelete("members",updated.length+1);
+      await saveMembers(updated,prevCount);
       setMembers(updated);
       setDelIdx(null);
     }catch(e){alert("삭제 실패: "+e.message);}
@@ -1065,8 +1067,10 @@ function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setA
   const weekDates=getLast7Days();
 
   const handleSaveRecord=async(date,rec)=>{
-    await saveRecord(date,rec);
-    setRecords(p=>({...p,[date]:rec}));
+    try{
+      await saveRecord(date,rec);
+      setRecords(p=>({...p,[date]:rec}));
+    }catch(e){alert("저장 실패: "+e.message);}
   };
 
   const handleSaveCategories=async cats=>{
@@ -1184,8 +1188,15 @@ function Login({onLogin,loading}){
   const [isCoach,setIsCoach]=useState(false);
   const [cpw,setCpw]=useState("");
   const [cerr,setCerr]=useState("");
+  const [logging,setLogging]=useState(false);
   const tap=()=>{const n=taps+1;setTaps(n);if(n>=5){setIsCoach(true);setTaps(0);}};
 
+  const doLogin=async()=>{
+    if(logging)return;
+    setLogging(true);
+    try{await onLogin("member",name,pin,setErr);}
+    finally{setLogging(false);}
+  };
   return(
     <div style={{minHeight:"100vh",background:"var(--bg)",display:"flex",
       flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -1211,8 +1222,8 @@ function Login({onLogin,loading}){
               <FInput value={pin} onChange={setPin} placeholder="PIN 번호" type="password"/>
             </div>
             {err&&<p style={{color:"var(--danger)",fontSize:12}}>{err}</p>}
-            <Btn full onClick={()=>onLogin("member",name,pin,setErr)}
-              style={{marginTop:4,padding:13}}>로그인</Btn>
+            <Btn full onClick={doLogin} disabled={logging}
+              style={{marginTop:4,padding:13}}>{logging?"로그인 중…":"로그인"}</Btn>
           </div>
         </div>
       ):(
@@ -1261,19 +1272,16 @@ function App(){
     if(role==="coach"){setSession({role:"coach"});return;}
     if(!name.trim()){setErr("이름을 입력해주세요.");return;}
     if(!pin.trim()){setErr("PIN을 입력해주세요.");return;}
-    // 시트에서 members 확인 (없으면 work_records 시트 기반으로 간단 허용)
     try{
       const rows=await sheetGet("members");
-      if(rows.length>0){
-        const match=rows.find(r=>String(r[0])===name.trim()&&String(r[1])===pin.trim());
-        if(!match){setErr("이름 또는 PIN이 올바르지 않습니다.");return;}
+      if(rows.length===0){
+        setErr("등록된 멤버가 없어요. 코치에게 문의해주세요.");return;
       }
-      // members 시트 없거나 비어있으면 이름만 확인 후 허용
+      const match=rows.find(r=>String(r[0]).trim()===name.trim()&&String(r[1]).trim()===pin.trim());
+      if(!match){setErr("이름 또는 PIN이 올바르지 않습니다.");return;}
       setSession({role:"member",name:name.trim()});
     }catch(e){
-      // 시트 접근 실패 시 로컬 허용 (오프라인 대비)
-      console.warn("members 시트 확인 실패, 로컬 허용:",e.message);
-      setSession({role:"member",name:name.trim()});
+      setErr("로그인 실패: "+e.message);
     }
   };
 
