@@ -1,4 +1,4 @@
-<!-- CoachOS v1.4 — 업무 트래킹 -->
+<!-- CoachOS v1.6 — 업무 트래킹 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -36,7 +36,7 @@ const {useState,useEffect,useRef,useCallback}=React;
 
 /* ── 상수 ── */
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbyOWrQXtFfGWcnw0VkcsDau81r1JFgcYwgHBxg6E5I93GocHPdfUyYJuuke5tb_alZP/exec";
-const VERSION="v1.4";
+const VERSION="v1.5";
 const DEFAULT_MODEL="gemini-2.0-flash";
 const GEMINI_KEY_LS="coachos_gkey";
 const GEMINI_MODEL_LS="coachos_gmodel";
@@ -55,6 +55,11 @@ const DEFAULT_CATEGORIES=[
 function getToday(){
   const d=new Date();
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+// Sheets가 날짜를 "2026-04-01T00:00:00.000Z" 형태로 반환할 때 잘라냄
+function normalizeDate(raw){
+  const s=String(raw||"");
+  return s.length>10?s.slice(0,10):s;
 }
 function getWeekStart(dateStr){
   const d=new Date(dateStr);
@@ -164,15 +169,26 @@ async function loadRecords(){
   const rows=await sheetGet("work_records");
   const result={};
   rows.filter(r=>r[0]).forEach(r=>{
-    try{result[r[0]]=JSON.parse(r[1]);}catch{}
+    try{
+      const date=normalizeDate(r[0]);
+      if(date) result[date]=JSON.parse(r[1]);
+    }catch{}
   });
   return result;
 }
 async function saveRecord(date,record){
   const rows=await sheetGet("work_records");
-  const idx=rows.findIndex(r=>r[0]===date);
-  if(idx<0)await sheetWrite("work_records",rows.length+1,[date,JSON.stringify(record)]);
-  else await sheetWrite("work_records",idx+1,[date,JSON.stringify(record)]);
+  const matchRows=[];
+  rows.forEach((r,i)=>{if(normalizeDate(r[0])===date)matchRows.push(i+1);});
+  if(matchRows.length===0){
+    await sheetWrite("work_records",rows.length+1,[date,JSON.stringify(record)]);
+  }else{
+    await sheetWrite("work_records",matchRows[0],[date,JSON.stringify(record)]);
+    // 중복 행(동일 날짜 여러 개) 공백으로 정리
+    for(let i=matchRows.length-1;i>=1;i--){
+      await sheetWrite("work_records",matchRows[i],[""," "]);
+    }
+  }
 }
 
 /* ── Gemini ── */
@@ -325,7 +341,7 @@ function WorkItemForm({categories,initial,onSave,onCancel,label}){
 }
 
 /* ── 기록 폼 ── */
-function RecordForm({date,record,categories,onSave,onDateChange}){
+function RecordForm({date,record,categories,onSave,onDateChange,today=TODAY}){
   const [workStart,setWorkStart]=useState(record?.workStart||"");
   const [workEnd,setWorkEnd]=useState(record?.workEnd||"");
   const [items,setItems]=useState(()=>record?.items?JSON.parse(JSON.stringify(record.items)):[]);
@@ -359,7 +375,7 @@ function RecordForm({date,record,categories,onSave,onDateChange}){
         borderRadius:10,padding:"10px 16px"}}>
         <span style={{fontSize:13,fontWeight:600,color:"var(--accent-d)"}}>날짜</span>
         <div style={{position:"relative",flex:1,maxWidth:220}}>
-          <input type="date" value={date} max={TODAY}
+          <input type="date" value={date} max={today}
             onChange={e=>onDateChange(e.target.value)}
             style={Object.assign({},iStyle,{background:"transparent",
               border:"1px solid var(--accent)",color:"transparent",caretColor:"transparent"})}/>
@@ -368,7 +384,7 @@ function RecordForm({date,record,categories,onSave,onDateChange}){
             {date} ({DAY_KR[getDayOfWeek(date)]})
           </span>
         </div>
-        {date===TODAY&&(
+        {date===today&&(
           <span style={{fontSize:11,fontWeight:600,color:"var(--accent)",
             background:"var(--accent-l)",borderRadius:20,padding:"2px 10px",
             border:"1px solid var(--accent)"}}>오늘</span>
@@ -497,7 +513,7 @@ function RecordForm({date,record,categories,onSave,onDateChange}){
 }
 
 /* ── 주간 테이블 ── */
-function WeekTable({records,dates,categories,onUpdate,isReadOnly}){
+function WeekTable({records,dates,categories,onUpdate,isReadOnly,today=TODAY}){
   const [editComment,setEditComment]=useState(null);
   const [commentDraft,setCommentDraft]=useState("");
   const [savingC,setSavingC]=useState(false);
@@ -528,7 +544,7 @@ function WeekTable({records,dates,categories,onUpdate,isReadOnly}){
                 minWidth:72,position:"sticky",left:0,background:"var(--surface2)",zIndex:2}}>항목</th>
               {dates.map(d=>{
                 const dow=getDayOfWeek(d);
-                const isToday=d===TODAY;
+                const isToday=d===today;
                 const hasRecord=!!records[d];
                 return(
                   <th key={d} style={{padding:"8px 6px",textAlign:"center",minWidth:120,
@@ -559,7 +575,7 @@ function WeekTable({records,dates,categories,onUpdate,isReadOnly}){
                 return(
                   <td key={d} style={{padding:"6px 6px",textAlign:"center",
                     borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
-                    background:d===TODAY?"#FAFCFF":"transparent",verticalAlign:"middle"}}>
+                    background:d===today?"#FAFCFF":"transparent",verticalAlign:"middle"}}>
                     {r&&r.workTotal
                       ?<div>
                         <div style={{fontSize:12,fontWeight:600,color:"var(--accent)"}}>{r.workTotal}</div>
@@ -585,7 +601,7 @@ function WeekTable({records,dates,categories,onUpdate,isReadOnly}){
                 return(
                   <td key={d} style={{padding:"6px 6px",textAlign:"center",
                     borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
-                    background:d===TODAY?"#FAFCFF":"transparent",verticalAlign:"middle"}}>
+                    background:d===today?"#FAFCFF":"transparent",verticalAlign:"middle"}}>
                     {total>0
                       ?<span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{total}</span>
                       :<span style={{fontSize:10,color:"var(--border2)"}}>—</span>}
@@ -610,7 +626,7 @@ function WeekTable({records,dates,categories,onUpdate,isReadOnly}){
                   return(
                     <td key={d} style={{padding:"6px 6px",textAlign:"center",
                       borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",
-                      background:d===TODAY?"#FAFCFF":"transparent",verticalAlign:"middle"}}>
+                      background:d===today?"#FAFCFF":"transparent",verticalAlign:"middle"}}>
                       {totalSets>0?(
                         <div>
                           <div style={{fontSize:12,fontWeight:700,color:cat.color}}>
@@ -634,7 +650,7 @@ function WeekTable({records,dates,categories,onUpdate,isReadOnly}){
               {dates.map(d=>(
                 <td key={d} style={{padding:"5px 6px",verticalAlign:"top",
                   borderLeft:"1px solid var(--border)",borderBottom:"1px solid var(--border)",
-                  background:d===TODAY?"#FAFCFF":"transparent"}}>
+                  background:d===today?"#FAFCFF":"transparent"}}>
                   {records[d]&&records[d].memo
                     ?<div style={{fontSize:9,color:"var(--text)",lineHeight:1.5,
                         fontStyle:"italic"}}>{records[d].memo}</div>
@@ -651,7 +667,7 @@ function WeekTable({records,dates,categories,onUpdate,isReadOnly}){
                 {dates.map(d=>(
                   <td key={d} style={{padding:"5px 6px",verticalAlign:"top",
                     borderLeft:"1px solid var(--border)",borderBottom:"1px solid var(--border)",
-                    background:d===TODAY?"#FAFCFF":"transparent"}}>
+                    background:d===today?"#FAFCFF":"transparent"}}>
                     {editComment===d?(
                       <div>
                         <textarea value={commentDraft}
@@ -689,7 +705,7 @@ function WeekTable({records,dates,categories,onUpdate,isReadOnly}){
 }
 
 /* ── 세트 그래프 ── */
-function SetsChart({records,dates,categories}){
+function SetsChart({records,dates,categories,today=TODAY}){
   const hasData=dates.some(d=>records[d]&&records[d].items&&records[d].items.length);
   if(!hasData)return null;
 
@@ -729,7 +745,7 @@ function SetsChart({records,dates,categories}){
               {totalSets>0&&(
                 <div style={{fontSize:9,fontWeight:600,color:"var(--text-mid)"}}>{totalSets}</div>
               )}
-              <div style={{fontSize:9,color:d===TODAY?"var(--accent)":dow===0?"var(--danger)":dow===6?"var(--accent)":"var(--text-dim)",fontWeight:d===TODAY?600:400}}>
+              <div style={{fontSize:9,color:d===today?"var(--accent)":dow===0?"var(--danger)":dow===6?"var(--accent)":"var(--text-dim)",fontWeight:d===today?600:400}}>
                 {DAY_KR[dow]}
               </div>
             </div>
@@ -889,9 +905,9 @@ function CategorySettings({categories,onSave,onClose,saving}){
 }
 
 /* ── 본인 홈 ── */
-function MyHome({records,categories,onSave,apiKey,geminiModel}){
+function MyHome({records,categories,onSave,apiKey,geminiModel,today=TODAY}){
   const [tab,setTab]=useState("write");
-  const [selectedDate,setSelectedDate]=useState(TODAY);
+  const [selectedDate,setSelectedDate]=useState(today);
   const weekDates=getLast7Days();
 
   return(
@@ -911,13 +927,13 @@ function MyHome({records,categories,onSave,apiKey,geminiModel}){
         <RecordForm key={selectedDate} date={selectedDate}
           record={records[selectedDate]} categories={categories}
           onSave={async(date,rec)=>await onSave(date,rec)}
-          onDateChange={setSelectedDate}/>
+          onDateChange={setSelectedDate} today={today}/>
       )}
       {tab==="view"&&(
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <WeekTable records={records} dates={weekDates} categories={categories}
-            onUpdate={()=>{}} isReadOnly={true}/>
-          <SetsChart records={records} dates={weekDates} categories={categories}/>
+            onUpdate={()=>{}} isReadOnly={true} today={today}/>
+          <SetsChart records={records} dates={weekDates} categories={categories} today={today}/>
           {apiKey&&<AIWeeklyReport records={records} dates={weekDates}
             categories={categories} apiKey={apiKey} geminiModel={geminiModel}/>}
         </div>
@@ -1056,9 +1072,9 @@ function MemberManager(){
 }
 
 /* ── 코치 대시보드 ── */
-function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setApiKey,geminiModel,setGeminiModel}){
+function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setApiKey,geminiModel,setGeminiModel,today=TODAY}){
   const [tab,setTab]=useState("weekly");
-  const [coachWriteDate,setCoachWriteDate]=useState(TODAY);
+  const [coachWriteDate,setCoachWriteDate]=useState(today);
   const [showSettings,setShowSettings]=useState(false);
   const [showCatSettings,setShowCatSettings]=useState(false);
   const [saving,setSaving]=useState(false);
@@ -1160,8 +1176,8 @@ function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setA
       {tab==="weekly"&&(
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <WeekTable records={records} dates={weekDates} categories={categories}
-            onUpdate={handleSaveRecord} isReadOnly={false}/>
-          <SetsChart records={records} dates={weekDates} categories={categories}/>
+            onUpdate={handleSaveRecord} isReadOnly={false} today={today}/>
+          <SetsChart records={records} dates={weekDates} categories={categories} today={today}/>
           {apiKey&&<AIWeeklyReport records={records} dates={weekDates}
             categories={categories} apiKey={apiKey} geminiModel={geminiModel}/>}
         </div>
@@ -1170,7 +1186,7 @@ function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setA
         <RecordForm key={coachWriteDate} date={coachWriteDate}
           record={records[coachWriteDate]} categories={categories}
           onSave={handleSaveRecord}
-          onDateChange={setCoachWriteDate}/>
+          onDateChange={setCoachWriteDate} today={today}/>
       )}
       {tab==="members"&&(
         <MemberManager/>
@@ -1256,6 +1272,27 @@ function App(){
   const [loading,setLoading]=useState(true);
   const [apiKey,setApiKey]=useState(()=>localStorage.getItem(GEMINI_KEY_LS)||"");
   const [geminiModel,setGeminiModel]=useState(()=>localStorage.getItem(GEMINI_MODEL_LS)||DEFAULT_MODEL);
+  // 자정이 지나면 TODAY가 바뀌므로 records를 재로드해서 주간기록을 갱신
+  const [today,setToday]=useState(getToday);
+
+  useEffect(()=>{
+    // 자정까지 남은 ms 계산 후 타이머 설정
+    const scheduleRefresh=()=>{
+      const now=new Date();
+      const msUntilMidnight=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1)-now;
+      return setTimeout(async()=>{
+        setToday(getToday());
+        // 날짜 바뀌면 records 재로드 (새 날짜 행 반영)
+        try{
+          const [recs,cats]=await Promise.all([loadRecords(),loadCategories()]);
+          setRecords(recs);setCategories(cats);
+        }catch(e){console.error("자정 갱신 실패:",e);}
+        scheduleRefresh(); // 다음 날 자정을 위해 재등록
+      },msUntilMidnight+500);
+    };
+    const t=scheduleRefresh();
+    return()=>clearTimeout(t);
+  },[]);
 
   useEffect(()=>{
     (async()=>{
@@ -1322,10 +1359,12 @@ function App(){
           <CoachDashboard records={records} setRecords={setRecords}
             categories={categories} setCategories={setCategories}
             apiKey={apiKey} setApiKey={setApiKey}
-            geminiModel={geminiModel} setGeminiModel={setGeminiModel}/>
+            geminiModel={geminiModel} setGeminiModel={setGeminiModel}
+            today={today}/>
         ):(
           <MyHome records={records} categories={categories}
-            onSave={saveMyRecord} apiKey={apiKey} geminiModel={geminiModel}/>
+            onSave={saveMyRecord} apiKey={apiKey} geminiModel={geminiModel}
+            today={today}/>
         )}
       </div>
     </div>
