@@ -1,4 +1,4 @@
-<!-- CoachOS v1.6 — 업무 트래킹 -->
+<!-- CoachOS v1.8 — 업무 트래킹 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -36,7 +36,7 @@ const {useState,useEffect,useRef,useCallback}=React;
 
 /* ── 상수 ── */
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbyOWrQXtFfGWcnw0VkcsDau81r1JFgcYwgHBxg6E5I93GocHPdfUyYJuuke5tb_alZP/exec";
-const VERSION="v1.5";
+const VERSION="v1.8";
 const DEFAULT_MODEL="gemini-2.0-flash";
 const GEMINI_KEY_LS="coachos_gkey";
 const GEMINI_MODEL_LS="coachos_gmodel";
@@ -56,10 +56,20 @@ function getToday(){
   const d=new Date();
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 }
-// Sheets가 날짜를 "2026-04-01T00:00:00.000Z" 형태로 반환할 때 잘라냄
+// Sheets 날짜 셀은 Date 직렬화 시 "2026-04-01T15:00:00.000Z" 형태로 옴
+// slice(0,10)하면 KST(UTC+9)에서 하루 전날로 밀리므로 로컬 타임존 기준으로 추출
 function normalizeDate(raw){
-  const s=String(raw||"");
-  return s.length>10?s.slice(0,10):s;
+  const s=String(raw||"").trim();
+  if(!s)return "";
+  // 이미 YYYY-MM-DD 형식이면 그대로
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s;
+  // ISO 또는 기타 파싱 가능한 형식
+  const d=new Date(s);
+  if(isNaN(d.getTime())){
+    console.warn("[normalizeDate] 파싱 불가:",s);
+    return "";  // 빈 문자열 → loadRecords에서 if(!date)return 으로 스킵
+  }
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 }
 function getWeekStart(dateStr){
   const d=new Date(dateStr);
@@ -171,8 +181,13 @@ async function loadRecords(){
   rows.filter(r=>r[0]).forEach(r=>{
     try{
       const date=normalizeDate(r[0]);
-      if(date) result[date]=JSON.parse(r[1]);
-    }catch{}
+      if(!date)return;
+      // r[1]이 이미 객체인 경우(Sheets 파싱) 대비
+      const val=typeof r[1]==="string"?JSON.parse(r[1]):r[1];
+      if(val&&typeof val==="object") result[date]=val;
+    }catch(e){
+      console.warn("[loadRecords] 행 파싱 실패 — r[0]:",r[0],"r[1]:",r[1],"err:",e.message);
+    }
   });
   return result;
 }
@@ -908,6 +923,8 @@ function CategorySettings({categories,onSave,onClose,saving}){
 function MyHome({records,categories,onSave,apiKey,geminiModel,today=TODAY}){
   const [tab,setTab]=useState("write");
   const [selectedDate,setSelectedDate]=useState(today);
+  // today prop이 자정에 바뀌면 selectedDate도 새 날짜로 갱신
+  useEffect(()=>{setSelectedDate(today);},[today]);
   const weekDates=getLast7Days();
 
   return(
@@ -1075,6 +1092,8 @@ function MemberManager(){
 function CoachDashboard({records,setRecords,categories,setCategories,apiKey,setApiKey,geminiModel,setGeminiModel,today=TODAY}){
   const [tab,setTab]=useState("weekly");
   const [coachWriteDate,setCoachWriteDate]=useState(today);
+  // today prop이 자정에 바뀌면 직접입력 탭 날짜도 새 날짜로 갱신
+  useEffect(()=>{setCoachWriteDate(today);},[today]);
   const [showSettings,setShowSettings]=useState(false);
   const [showCatSettings,setShowCatSettings]=useState(false);
   const [saving,setSaving]=useState(false);
@@ -1274,13 +1293,14 @@ function App(){
   const [geminiModel,setGeminiModel]=useState(()=>localStorage.getItem(GEMINI_MODEL_LS)||DEFAULT_MODEL);
   // 자정이 지나면 TODAY가 바뀌므로 records를 재로드해서 주간기록을 갱신
   const [today,setToday]=useState(getToday);
+  const midnightTimerRef=useRef(null);
 
   useEffect(()=>{
-    // 자정까지 남은 ms 계산 후 타이머 설정
+    // 재귀 타이머 ID를 ref에 저장 → cleanup에서 확실히 제거 가능
     const scheduleRefresh=()=>{
       const now=new Date();
       const msUntilMidnight=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1)-now;
-      return setTimeout(async()=>{
+      midnightTimerRef.current=setTimeout(async()=>{
         setToday(getToday());
         // 날짜 바뀌면 records 재로드 (새 날짜 행 반영)
         try{
@@ -1290,8 +1310,8 @@ function App(){
         scheduleRefresh(); // 다음 날 자정을 위해 재등록
       },msUntilMidnight+500);
     };
-    const t=scheduleRefresh();
-    return()=>clearTimeout(t);
+    scheduleRefresh();
+    return()=>clearTimeout(midnightTimerRef.current);
   },[]);
 
   useEffect(()=>{
