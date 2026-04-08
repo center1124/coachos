@@ -1,4 +1,4 @@
-<!-- CoachOS v1.8 — 업무 트래킹 -->
+<!-- CoachOS v1.9 — 업무 트래킹 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -36,7 +36,7 @@ const {useState,useEffect,useRef,useCallback}=React;
 
 /* ── 상수 ── */
 const SCRIPT_URL="https://script.google.com/macros/s/AKfycbyOWrQXtFfGWcnw0VkcsDau81r1JFgcYwgHBxg6E5I93GocHPdfUyYJuuke5tb_alZP/exec";
-const VERSION="v1.8";
+const VERSION="v1.9";
 const DEFAULT_MODEL="gemini-2.0-flash";
 const GEMINI_KEY_LS="coachos_gkey";
 const GEMINI_MODEL_LS="coachos_gmodel";
@@ -177,18 +177,49 @@ async function saveCategories(cats){
 ── */
 async function loadRecords(){
   const rows=await sheetGet("work_records");
-  const result={};
-  rows.filter(r=>r[0]).forEach(r=>{
+  // date -> {best: record, bestIdx: 1-based, allIdxs: []}
+  const byDate={};
+  rows.forEach((r,i)=>{
+    if(!r[0])return;
     try{
       const date=normalizeDate(r[0]);
       if(!date)return;
-      // r[1]이 이미 객체인 경우(Sheets 파싱) 대비
       const val=typeof r[1]==="string"?JSON.parse(r[1]):r[1];
-      if(val&&typeof val==="object") result[date]=val;
+      if(!val||typeof val!=="object")return;
+      if(!byDate[date]){byDate[date]={best:val,bestIdx:i+1,allIdxs:[i+1]};}
+      else{
+        byDate[date].allIdxs.push(i+1);
+        // items가 더 많은 행을 채택
+        const curItems=(val.items||[]).length;
+        const bestItems=(byDate[date].best.items||[]).length;
+        if(curItems>bestItems){byDate[date].best=val;byDate[date].bestIdx=i+1;}
+      }
     }catch(e){
-      console.warn("[loadRecords] 행 파싱 실패 — r[0]:",r[0],"r[1]:",r[1],"err:",e.message);
+      console.warn("[loadRecords] 행 파싱 실패 r[0]:",r[0],"r[1]:",r[1],"err:",e.message);
     }
   });
+  const result={};
+  const dupDates=[];
+  Object.entries(byDate).forEach(([date,info])=>{
+    result[date]=info.best;
+    if(info.allIdxs.length>1) dupDates.push({date,allIdxs:info.allIdxs});
+  });
+  // 중복 행 백그라운드 정리 (fire-and-forget)
+  if(dupDates.length>0){
+    console.log("[loadRecords] 중복 행 정리 시작:",dupDates.map(d=>d.date));
+    (async()=>{
+      for(const {date,allIdxs} of dupDates){
+        const sorted=[...allIdxs].sort((a,b)=>a-b);
+        try{await sheetWrite("work_records",sorted[0],[date,JSON.stringify(result[date])]);}
+        catch(e){console.warn("[cleanup] 쓰기 실패:",date,e.message);continue;}
+        for(let i=sorted.length-1;i>=1;i--){
+          try{await sheetWrite("work_records",sorted[i],[""," "]);}
+          catch(e){console.warn("[cleanup] 공백화 실패:",sorted[i],e.message);}
+        }
+      }
+      console.log("[loadRecords] 중복 행 정리 완료");
+    })();
+  }
   return result;
 }
 async function saveRecord(date,record){
